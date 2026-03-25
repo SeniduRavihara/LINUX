@@ -90,11 +90,13 @@ kill_chrome_tabs() {
 }
 
 kill_chrome_all() {
-    # Force-kill every Chrome process
+    # Force-kill every Chrome process (target both chrome and google-chrome)
     local killed=0
     while IFS= read -r pid; do
-        kill -9 "$pid" 2>/dev/null && (( killed++ ))
-    done < <(pgrep -f "chrome" 2>/dev/null)
+        if [[ "$pid" != "$$" ]]; then
+            kill -9 "$pid" 2>/dev/null && (( killed++ ))
+        fi
+    done < <(pgrep -f "chrome|google-chrome" 2>/dev/null)
     echo "$killed"
 }
 
@@ -110,15 +112,19 @@ kill_brave_tabs() {
 kill_brave_all() {
     # Force-kill every Brave process
     local killed=0
+    # Use pgrep -x for exact match to avoid catching other things with 'brave' in name
+    # But since Brave often has sub-processes with names like 'brave-browser', -f is better if we are careful.
+    # The safest is to use pgrep -f "brave" but exclude the script itself.
     while IFS= read -r pid; do
-        kill -9 "$pid" 2>/dev/null && (( killed++ ))
+        if [[ "$pid" != "$$" ]]; then
+            kill -9 "$pid" 2>/dev/null && (( killed++ ))
+        fi
     done < <(pgrep -f "brave" 2>/dev/null)
     echo "$killed"
 }
 
 # ── State tracking ──────────────────────────────────────────
 kill_stage=0            # 0=normal, 1=BraveAll, 2=ChromeAll
-cooldown_seconds=0      # grace period after any kill action
 
 # ── Main loop ───────────────────────────────────────────────
 log "INFO" "RAM Watchdog started. Threshold: ${KILL_THRESHOLD}% (2-Stage Full Kill: Brave → Chrome)"
@@ -130,46 +136,51 @@ while true; do
     RAM_PCT=$(get_ram_percent)
     RAM_DETAILS=$(get_ram_details)
 
-    # ── Cooldown check ──────────────────────────────────────
-    if (( cooldown_seconds > 0 )); then
-        (( cooldown_seconds -= CHECK_INTERVAL ))
-        sleep "$CHECK_INTERVAL"
-        continue
-    fi
-
     # ── THRESHOLD AT 95% ────────────────────────────────────
     if (( RAM_PCT >= KILL_THRESHOLD )); then
-        (( kill_stage++ ))
+        action_taken=false
 
-        case "$kill_stage" in
-            1)
-                log "CRITICAL" "RAM hit ${RAM_PCT}% (Stage 1) — Closing Brave fully."
-                KILLED=$(kill_brave_all)
-                notify "critical" "🚨 RAM 95% — Brave Closed" "Stage 1: Brave was force-killed to save memory!\nCooldown: 60s.\nRAM: ${RAM_DETAILS}" "$ICON_CRITICAL"
+        # Stage 1: Brave
+        if pgrep -f "brave" | grep -v "$$" >/dev/null; then
+            log "CRITICAL" "RAM hit ${RAM_PCT}% — Closing Brave fully."
+            KILLED=$(kill_brave_all)
+            if [[ "$KILLED" -gt 0 ]]; then
+                notify "critical" "🚨 RAM 95% — Brave Closed" "Brave was force-killed to save memory!\nRAM: ${RAM_DETAILS}\nCooldown: 60s" "$ICON_CRITICAL"
                 log "CRITICAL" "Killed: ${KILLED} Brave processes."
-                kill_stage=0
-                cooldown_seconds=60 
-                ;;
-            2)
-                log "CRITICAL" "RAM still at ${RAM_PCT}% (Stage 2) — EMERGENCY: Closing Chrome fully."
-                KILLED=$(kill_chrome_all)
-                notify "critical" "🚨 RAM 95% — Chrome Closed" "Stage 2: Chrome was force-killed!\nCooldown: 60s.\nRAM: ${RAM_DETAILS}" "$ICON_CRITICAL"
-                log "CRITICAL" "Killed: ${KILLED} Chrome processes."
-                kill_stage=0
-                cooldown_seconds=60 # Long cooldown after final stage
-                ;;
-        esac
+                action_taken=true
+            fi
+        fi
 
-        # Short cooldown/wait between stages
-        sleep 2
+        # If Brave wasn't there or RAM is still high after Brave kill
+        if [[ "$action_taken" == "true" ]]; then
+            sleep 2
+            RAM_PCT=$(get_ram_percent)
+            RAM_DETAILS=$(get_ram_details)
+        fi
+
+        # Stage 2: Chrome
+        if (( RAM_PCT >= KILL_THRESHOLD )); then
+            # Target common chrome binary names
+            if pgrep -f "chrome|google-chrome" | grep -v "$$" >/dev/null; then
+                log "CRITICAL" "RAM still at ${RAM_PCT}% — EMERGENCY: Closing Chrome fully."
+                KILLED=$(kill_chrome_all)
+                if [[ "$KILLED" -gt 0 ]]; then
+                    notify "critical" "🚨 RAM 95% — Chrome Closed" "Chrome was force-killed to save memory!\nRAM: ${RAM_DETAILS}\nCooldown: 60s" "$ICON_CRITICAL"
+                    log "CRITICAL" "Killed: ${KILLED} Chrome processes."
+                    action_taken=true
+                fi
+            fi
+        fi
+
+        # Cooldown period if any action was taken
+        if [[ "$action_taken" == "true" ]]; then
+            log "INFO" "Entering 60s cooldown to allow system stabilization."
+            sleep 60
+        fi
+        
         continue
 
     # ── RAM Normal ──────────────────────────────────────────
-    else
-        if [[ "$kill_stage" -gt 0 ]]; then
-            log "INFO" "RAM recovered to ${RAM_PCT}% after Stage ${kill_stage}."
-        fi
-        kill_stage=0
     fi
 
     sleep "$CHECK_INTERVAL"
