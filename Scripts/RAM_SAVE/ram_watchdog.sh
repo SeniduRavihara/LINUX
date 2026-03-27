@@ -152,10 +152,26 @@ while true; do
         fi
 
         # If Brave wasn't there or RAM is still high after Brave kill
-        if [[ "$action_taken" == "true" ]]; then
+        if [[ "$action_taken" == "true" ]] || (( RAM_PCT >= KILL_THRESHOLD )); then
             sleep 2
             RAM_PCT=$(get_ram_percent)
             RAM_DETAILS=$(get_ram_details)
+
+            # Optional Stage: Interactive Chrome Tab Kill Prompt
+            # Only ask if RAM hasn't sufficiently recovered AND Chrome is running
+            if (( RAM_PCT >= KILL_THRESHOLD )) && pgrep -f "chrome|google-chrome" | grep -v "$$" >/dev/null; then
+                export DISPLAY=:0 # Common default for Linux desktop environments
+                if zenity --question --text "Brave closed, but RAM is still high (${RAM_PCT}%).\nShould I also close Chrome TABS to save more memory?" --timeout=10 --title="RAM Watchdog Alert" --ok-label="Yes, close tabs" --cancel-label="No, keep them"; then
+                    KILLED=$(kill_chrome_tabs)
+                    if [[ "$KILLED" -gt 0 ]]; then
+                        notify "normal" "🧹 Chrome Tabs Closed" "Force-killed ${KILLED} renderer processes (tabs)." "$ICON_WARN"
+                        log "INFO" "User opted to kill ${KILLED} Chrome tabs."
+                        sleep 2
+                        RAM_PCT=$(get_ram_percent)
+                        RAM_DETAILS=$(get_ram_details)
+                    fi
+                fi
+            fi
         fi
 
         # Stage 2: Chrome
