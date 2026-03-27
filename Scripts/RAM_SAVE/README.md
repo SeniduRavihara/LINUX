@@ -1,17 +1,18 @@
-# 🚀 RAM Watchdog (2-Stage Full Kill)
+# 🚀 RAM Watchdog (3-Stage Intelligent Kill)
 
-A high-performance Linux bash script to monitor RAM usage and prevent system freezes by managing memory-hungry browsers with a strict, 2-stage full closure approach.
+A high-performance Linux bash script to monitor RAM usage and prevent system freezes with a progressive, intelligent approach to managing Chrome and Brave.
 
 ## 🛠 Features
 
-*   **Brave Priority**: Brave is completely closed before Chrome is even touched.
-*   **2-Stage 95% Kill**:
-    1.  **Stage 1**: Force-kill **Brave fully**. (No tab-killing).
-    2.  **Stage 2**: Force-kill **Chrome fully** (EMERGENCY).
-*   **No Tab Reload Cycles**: The script skips tab-killing entirely to avoid the frustration of reloading crashed tabs.
-*   **Progressive Re-checks**: Stage 2 only triggers if RAM remains >= 95% on the next check (after Stage 1). If Stage 1 frees enough RAM, **Chrome stays safe.**
-*   **60s Grace Period**: After any full browser closure, the watchdog enters a 1-minute cooldown.
+*   **Brave Priority**: Brave is completely closed before Chrome is touched.
+*   **3-Stage Progressive Action (at 95% RAM)**:
+    1.  **Stage 1: Brave Kill**: Force-kills **Brave fully**.
+    2.  **Interactive Stage**: If RAM is still high, an interactive **zenity prompt** (10s timeout) asks if you want to close **Chrome tabs** (renderer processes) while keeping the main window.
+    3.  **Stage 2: Emergency Kill**: Force-kills **Chrome fully** as a final safety measure.
+*   **Intelligent Re-checks**: Each stage only triggers if RAM remains critically high after the previous action.
+*   **60s Grace Period**: After any kill action, the watchdog enters a 1-minute cooldown to let the system stabilize.
 *   **High Sensitivity**: Checks RAM every **3 seconds**.
+*   **Reliable Management**: Now runs as a **systemd user service** for robust background operation and automatic restarts.
 
 ## 📥 Installation
 
@@ -22,14 +23,15 @@ A high-performance Linux bash script to monitor RAM usage and prevent system fre
    ./install_watchdog.sh
    ```
 
-The script will be installed to `~/.local/bin/ram_watchdog.sh`.
+The script will be installed to `~/.local/bin/ram_watchdog.sh` and set up as a systemd service.
 
-## ⚙️ Management
+## ⚙️ Management (systemd)
 
-*   **View live logs**: `tail -f ~/.ram_watchdog.log`
-*   **Check process**: `pgrep -f ram_watchdog.sh`
-*   **Stop/Kill**: `pkill -f ram_watchdog.sh`
-*   **Restart manually**: `~/.local/bin/ram_watchdog.sh --daemon`
+*   **View status**: `systemctl --user status ram-watchdog.service`
+*   **Live logs**: `journalctl --user -u ram-watchdog.service -f`
+*   **Stop**: `systemctl --user stop ram-watchdog.service`
+*   **Start**: `systemctl --user start ram-watchdog.service`
+*   **Restart**: `systemctl --user restart ram-watchdog.service`
 
 ---
 *Created and maintained by Antigravity*

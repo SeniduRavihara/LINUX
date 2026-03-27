@@ -27,37 +27,36 @@ cp "$SCRIPT_NAME" "$INSTALL_PATH"
 chmod +x "$INSTALL_PATH"
 echo "✅ Installed to: $INSTALL_PATH"
 
-# 3. Add ~/.local/bin to PATH if not already there
-if ! echo "$PATH" | grep -q "$INSTALL_DIR"; then
-    SHELL_RC="$HOME/.bashrc"
-    [[ -f "$HOME/.zshrc" ]] && SHELL_RC="$HOME/.zshrc"
-    echo "export PATH=\"\$PATH:$INSTALL_DIR\"" >> "$SHELL_RC"
-    echo "✅ Added $INSTALL_DIR to PATH in $SHELL_RC"
-fi
+# 3. Create systemd user service directory
+mkdir -p "$HOME/.config/systemd/user"
 
-# 4. Create autostart .desktop entry (works on GNOME, KDE, XFCE)
-mkdir -p "$AUTOSTART_DIR"
-cat > "$AUTOSTART_FILE" <<EOF
-[Desktop Entry]
-Type=Application
-Name=RAM Watchdog
-Comment=Monitors RAM and kills Chrome if usage is too high
-Exec=bash -c 'sleep 10 && $INSTALL_PATH --daemon'
-Terminal=false
-Hidden=false
-X-GNOME-Autostart-enabled=true
+# 4. Create the service file
+SERVICE_FILE="$HOME/.config/systemd/user/ram-watchdog.service"
+cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=RAM Watchdog Service
+After=network.target
+
+[Service]
+ExecStart=$INSTALL_PATH
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
 EOF
-echo "✅ Autostart entry created: $AUTOSTART_FILE"
+echo "✅ Systemd service created: $SERVICE_FILE"
 
-# 5. Start it right now
-"$INSTALL_PATH" --daemon
+# 5. Load, Enable and Start the service
+systemctl --user daemon-reload
+systemctl --user enable ram-watchdog.service
+systemctl --user restart ram-watchdog.service
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  RAM Watchdog is now RUNNING 🚀"
-echo "  Log file: ~/.ram_watchdog.log"
-echo ""
-echo "  Useful commands:"
-echo "  • View live log:  tail -f ~/.ram_watchdog.log"
-echo "  • Stop watchdog:  pkill -f ram_watchdog.sh"
-echo "  • Check if alive: pgrep -f ram_watchdog.sh"
+echo "  RAM Watchdog is now RUNNING (systemd) 🚀"
+echo "  Check status: systemctl --user status ram-watchdog.service"
+echo "  View logs:    journalctl --user -u ram-watchdog.service -f"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
