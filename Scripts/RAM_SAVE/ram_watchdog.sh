@@ -112,14 +112,22 @@ kill_brave_tabs() {
 kill_brave_all() {
     # Force-kill every Brave process
     local killed=0
-    # Use pgrep -x for exact match to avoid catching other things with 'brave' in name
-    # But since Brave often has sub-processes with names like 'brave-browser', -f is better if we are careful.
-    # The safest is to use pgrep -f "brave" but exclude the script itself.
     while IFS= read -r pid; do
         if [[ "$pid" != "$$" ]]; then
             kill -9 "$pid" 2>/dev/null && (( killed++ ))
         fi
     done < <(pgrep -f "brave" 2>/dev/null)
+    echo "$killed"
+}
+
+kill_build_processes() {
+    # Kill npm run build and related node processes (common in dev environments)
+    local killed=0
+    while IFS= read -r pid; do
+        if [[ "$pid" != "$$" ]]; then
+            kill -9 "$pid" 2>/dev/null && (( killed++ ))
+        fi
+    done < <(pgrep -f "npm run build|next build|vite build" 2>/dev/null)
     echo "$killed"
 }
 
@@ -139,6 +147,17 @@ while true; do
     # ── THRESHOLD AT 95% ────────────────────────────────────
     if (( RAM_PCT >= KILL_THRESHOLD )); then
         action_taken=false
+
+        # Stage 0: Build processes (Kill immediately if present)
+        if pgrep -f "npm run build|next build|vite build" | grep -v "$$" >/dev/null; then
+            log "CRITICAL" "RAM hit ${RAM_PCT}% — Terminating build process."
+            KILLED=$(kill_build_processes)
+            if [[ "$KILLED" -gt 0 ]]; then
+                notify "critical" "🚨 RAM 95% — Build Terminated" "Build process was force-killed to save memory!\nRAM: ${RAM_DETAILS}" "$ICON_CRITICAL"
+                log "CRITICAL" "Killed: ${KILLED} build-related processes."
+                action_taken=true
+            fi
+        fi
 
         # Stage 1: Brave
         if pgrep -f "brave" | grep -v "$$" >/dev/null; then
