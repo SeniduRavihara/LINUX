@@ -125,6 +125,18 @@ kill_build_processes() {
     local killed=0
     while IFS= read -r pid; do
         if [[ "$pid" != "$$" ]]; then
+            # Try to send a message to the process's stdout before killing
+            # This helps AI agents or users see why the process died
+            if [[ -d "/proc/$pid/fd" ]]; then
+                {
+                    echo -e "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                    echo -e "⚠️  [RAM WATCHDOG] KILLING THIS PROCESS"
+                    echo -e "REASON: RAM usage exceeded 95% (${RAM_PCT}%)."
+                    echo -e "ACTION: System protection triggered to prevent freeze."
+                    echo -e "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                } > "/proc/$pid/fd/1" 2>/dev/null
+            fi
+
             kill -9 "$pid" 2>/dev/null && (( killed++ ))
         fi
     done < <(pgrep -f "npm run build|next build|vite build" 2>/dev/null)
