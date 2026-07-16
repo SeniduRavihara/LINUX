@@ -5,6 +5,7 @@ This repository documents my engineering approach to optimizing a 2-year-old i5 
 ## Documentation
 
 - [Audio Quality Optimization](/docs/AudioQuality.md)
+- [Custom File Path Copier](/docs/custom-file-path-copier.md)
 - [Docker Setup Guide](/docs/docker-setup.md)
 - [Fix Blur in VSCode](/docs/FixBlurInVscode.md)
 - [Linux Memory Management & ZRAM Guide](/docs/linux_memory_management.md)
