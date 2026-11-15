@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transcribe a chosen audio file using AGY's speech dictation and save the text."""
+"""Transcribe a chosen audio file using AGY's speech dictation directly to clipboard and output."""
 import os, sys, subprocess as sp, tempfile, pathlib, shutil, pty, select, time, re, termios, tty, signal, fcntl, wave, array, datetime, shlex
 
 def run(*args, **kw):
@@ -52,12 +52,8 @@ def copy_to_clipboard(text):
 
     return False
 
-def show_transcript_dialog(output_path):
+def show_transcript_dialog(text, subtitle=''):
     """Displays a graphical window with the transcript and a prominent Copy button."""
-    output_path = pathlib.Path(output_path)
-    if not output_path.exists():
-        return
-    text = output_path.read_text(encoding='utf-8')
     copy_to_clipboard(text)
 
     # 1. Try modern Libadwaita / GTK4 UI (native GNOME look with Copy button and toast)
@@ -70,14 +66,14 @@ def show_transcript_dialog(output_path):
         app = Adw.Application(application_id=f'com.senu.speechtotext.viewer{os.getpid()}')
 
         def on_activate(app):
-            win = Adw.ApplicationWindow(application=app, title='Sinhala transcript — saved')
+            win = Adw.ApplicationWindow(application=app, title='Sinhala transcript')
             win.set_default_size(860, 620)
 
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
             # Header bar with document title and Copy button
             header = Adw.HeaderBar()
-            title_widget = Adw.WindowTitle(title='Sinhala transcript — saved', subtitle=output_path.name)
+            title_widget = Adw.WindowTitle(title='Sinhala transcript', subtitle=subtitle)
             header.set_title_widget(title_widget)
 
             copy_btn = Gtk.Button(label=' Copy Text')
@@ -122,26 +118,29 @@ def show_transcript_dialog(output_path):
     except Exception:
         pass
 
-    # 2. Fallback to Zenity with extra Copy button
+    # 2. Fallback to Zenity with temporary file that cleans itself up
     if shutil.which('zenity'):
-        while True:
-            res = sp.run([
-                'zenity', '--text-info',
-                '--title=Sinhala transcript — saved',
-                '--width=850', '--height=600',
-                '--editable',
-                '--extra-button=Copy to Clipboard',
-                '--ok-label=Close',
-                '--cancel-label=Close',
-                f'--filename={output_path}'
-            ], capture_output=True, text=True)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8') as tmp:
+            tmp.write(text)
+            tmp.flush()
+            while True:
+                res = sp.run([
+                    'zenity', '--text-info',
+                    '--title=Sinhala transcript',
+                    '--width=850', '--height=600',
+                    '--editable',
+                    '--extra-button=Copy to Clipboard',
+                    '--ok-label=Close',
+                    '--cancel-label=Close',
+                    f'--filename={tmp.name}'
+                ], capture_output=True, text=True)
 
-            if 'Copy' in res.stdout or 'Copy' in res.stderr:
-                copy_to_clipboard(text)
-                if shutil.which('notify-send'):
-                    sp.run(['notify-send', '-i', 'edit-copy', 'Sinhala Transcript', 'Copied to clipboard!'], check=False)
-                continue
-            break
+                if 'Copy' in res.stdout or 'Copy' in res.stderr:
+                    copy_to_clipboard(text)
+                    if shutil.which('notify-send'):
+                        sp.run(['notify-send', '-i', 'edit-copy', 'Sinhala Transcript', 'Copied to clipboard!'], check=False)
+                    continue
+                break
 
 def split_audio(source, folder):
     """Cut at a quiet window near 25 seconds, with no missing audio frames."""
@@ -180,13 +179,19 @@ def main():
             raise RuntimeError(f'Missing required program: {name}')
 
     no_gui = '--no-gui' in sys.argv
-    cli_args = [a for a in sys.argv[1:] if a != '--no-gui']
+    save_path = None
+    if '--save' in sys.argv:
+        idx = sys.argv.index('--save')
+        if idx + 1 < len(sys.argv) and not sys.argv[idx + 1].startswith('-'):
+            save_path = pathlib.Path(sys.argv[idx + 1])
+
+    cli_args = [a for a in sys.argv[1:] if a not in ('--no-gui', '--save') and not (save_path and a == str(save_path))]
 
     if len(cli_args) > 0:
         audio = cli_args[0]
-        # Allow passing existing transcript to view/copy
+        # Allow viewing an existing text file if passed
         if audio.endswith('.txt') and pathlib.Path(audio).is_file():
-            show_transcript_dialog(audio)
+            show_transcript_dialog(pathlib.Path(audio).read_text(encoding='utf-8'), subtitle=pathlib.Path(audio).name)
             return
     else:
         res = sp.run([
@@ -210,6 +215,7 @@ def main():
     master = None
     terminal = None
     old = None
+    final_text = ''
 
     try:
         if os.isatty(sys.stdin.fileno()):
@@ -239,11 +245,7 @@ def main():
                 '-i', audio, '-vn', '-ac', '1', '-ar', '16000', str(folder / 'message.wav'))
 
             chunks = split_audio(folder / 'message.wav', folder)
-            output_dir = pathlib.Path(__file__).resolve().parent / 'transcripts'
-            output_dir.mkdir(exist_ok=True)
-            stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-            output = output_dir / (pathlib.Path(audio).stem + '-' + stamp + '.txt')
-            partial = output.with_suffix('.partial.txt')
+            partial = folder / 'partial.txt'
 
             config = folder / 'save-target'
             saved = folder / 'saved.txt'
@@ -432,9 +434,8 @@ def main():
                                 attempts = 0
 
                         if part == len(chunks):
-                            if partial.exists():
-                                partial.replace(output)
-                            tty_write(f'\r\nTRANSCRIPTION COMPLETE: {output}\r\n')
+                            final_text = '\n\n'.join(collected)
+                            tty_write(f'\r\nTRANSCRIPTION COMPLETE.\r\n')
                             # Exit AGY session cleanly
                             os.write(master, b'/exit\r')
                             time.sleep(1.0)
@@ -446,7 +447,8 @@ def main():
                         seen = ''
 
                     elif now >= export_deadline:
-                        raise RuntimeError(f'AGY timed out exporting section {part + 1}. Partial text saved in: {partial}')
+                        final_text = '\n\n'.join(collected)
+                        raise RuntimeError(f'AGY timed out exporting section {part + 1}.')
                     elif now >= export_at:
                         os.write(master, b'\x07')  # Ctrl+G opens prompt in editor
                         export_at = now + 3.5
@@ -506,18 +508,22 @@ def main():
             for module in reversed(modules):
                 sp.run(['pactl', 'unload-module', module], stdout=sp.DEVNULL, stderr=sp.DEVNULL)
 
-    if 'output' in locals() and output.exists():
-        text_content = output.read_text(encoding='utf-8')
-        print(f'\nTranscription successfully saved:\n{output}\n')
+    if final_text:
+        # Save only if user explicitly passed --save
+        if save_path:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            save_path.write_text(final_text, encoding='utf-8')
+
         # Automatically copy to clipboard
-        copy_to_clipboard(text_content)
-        print('Copied to system clipboard!')
+        copy_to_clipboard(final_text)
+
         print('\n=== TRANSCRIPT START ===')
-        print(text_content)
+        print(final_text)
         print('=== TRANSCRIPT END ===\n')
+
         # Display GUI viewer dialog with prominent Copy button unless --no-gui requested
         if not no_gui:
-            show_transcript_dialog(output)
+            show_transcript_dialog(final_text, subtitle=pathlib.Path(audio).stem)
 
 if __name__ == '__main__':
     try:
